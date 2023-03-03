@@ -1,4 +1,4 @@
-name: Authentification service CI
+name: TP_CLEAN_CODE_FLAG
 
 on:
   workflow_dispatch:
