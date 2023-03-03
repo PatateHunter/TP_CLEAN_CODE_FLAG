@@ -1,0 +1,114 @@
+name: Authentification service CI
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+    types: [opened, synchronize, reopened]
+
+jobs:
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: Set up JDK 11
+        uses: actions/setup-java@v2
+        with:
+          java-version: '11'
+          distribution: 'temurin'
+          cache: maven
+      - name: Cache the Maven packages to speed up build
+        uses: actions/cache@v1
+        with:
+          path: ~/.m2
+          key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
+          restore-keys: ${{ runner.os }}-m2
+
+      - name: Build and test project with Maven
+        run: mvn -B clean install -DskipTests --file ./pom.xml
+
+  test:
+    runs-on: ubuntu-latest
+    needs: [build]
+    steps:
+      - uses: actions/checkout@v2
+      - name: Set up JDK 11
+        uses: actions/setup-java@v2
+        with:
+          java-version: '11'
+          distribution: 'temurin'
+          cache: maven
+      - name: Cache the Maven packages to speed up build
+        uses: actions/cache@v1
+        with:
+          path: ~/.m2
+          key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
+          restore-keys: ${{ runner.os }}-m2
+
+      - name: Build and test project with Maven
+        run: mvn -B test --file ./pom.xml
+
+  package:
+    needs: [code_quality]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      jar_version: ${{ steps.bump.outputs.jar_version }}
+
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions/setup-java@v1
+        with:
+          java-version: 11
+          distribution: 'adopt'
+          server-id: github # Value of the distributionManagement/repository/id field of the pom.xml
+          settings-path: ${{ github.workspace }} # location for the settings.xml file
+      - name: Bump jar version
+        id: bump
+        run: |
+          OLD_VERSION=$(cd ./ && mvn help:evaluate -Dexpression=project.version -q -DforceStdout)
+          echo "$OLD_VERSION"
+          echo ::set-output ${OLD_VERSION}
+          BUMP_MODE="none"
+          old="$OLD_VERSION"
+          parts=( ${old//./ } )
+          bv=$((parts[2] + 1))
+          NEW_VERSION="latest"
+          echo "pom.xml at" ./ "will be bumped from" $OLD_VERSION "to" $NEW_VERSION
+          mvn -q versions:set -DnewVersion="${NEW_VERSION}" --file ./pom.xml
+          echo ::set-output name=jar_version::${NEW_VERSION}
+      - name: Build a package
+        run: mvn -B package -DskipTests --file ./pom.xml
+
+      - name: Temporarily save jar artifact
+        uses: actions/upload-artifact@v2
+        with:
+          name: jar-artifact
+          path: ${{ github.workspace }}/target/*.jar
+          retention-days: 1
+deploy:
+    needs: [package]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+        - uses: actions/checkout@v2
+        - uses: actions/setup-java@v1
+            with:
+            java-version: 11
+            distribution: 'adopt'
+            server-id: github # Value of the distributionManagement/repository/id field of the pom.xml
+            settings-path: ${{ github.workspace }} # location for the settings.xml file
+        - name: Download jar artifact
+            uses: actions/download-artifact@v2
+            with:
+            name: jar-artifact
+            path: ${{ github.workspace }}/target/
+        - name: Deploy to GitHub Packages
+            run: mvn deploy --file ./pom.xml
